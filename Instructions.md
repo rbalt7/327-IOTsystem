@@ -1,3 +1,10 @@
+Assignment #8 Report
+Group#7
+ Roman Baltazar 018409350
+Alvaro Mora 029521451 
+Carlos Sermeno 007548149
+Instructor: Malik Luti
+
 Overview
 
 This project implements a comprehensive end-to-end IoT system that integrates:
