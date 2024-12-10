@@ -2,11 +2,11 @@ from pymongo import MongoClient
 from datetime import datetime, timedelta
 import socket
 
-# Saves metadata info for each device
+# Dictionary list that saves metadata info for each device
 device_list = []
 
 # Function to extract metadata
-def extract_metadata_info(document, device_list):
+def extract_metadata_info(document):
     device = {}
     sensors = []
 
@@ -41,29 +41,50 @@ def extract_metadata_info(document, device_list):
 
 
 # Function to find average humidity in fridge
-def calculate_average_moisture(collection_virtual, collection_metadata):
+def calculate_average_moisture(collection):
     """Calculate average moisture in the kitchen fridge over the past three hours."""
     three_hours_ago = datetime.utcnow() - timedelta(hours=3)
     # Get fridge id
-    query = {"customAttributes.name": {"$regex": "fridge", "$options": "i"}}
-    device_id = collection_metadata.find_one(query)['assetUid']
+    device_id = ""
+    for device in device_list:
+        if "fridge" in device["name"].lower():
+            device_id = device["assetUid"]
+            break
+    print("device_id = ", device_id)
     # Get fridge moisture meter data
     query = {"payload.parent_asset_uid": device_id, 'time': {"$gte": three_hours_ago}}
-    results = collection_virtual.find(query)
+    results = collection.find(query)
 
     # Check if we have any results
-    if collection_virtual.count_documents(query) > 0:
+    if collection.count_documents(query) > 0:
         print("Query returned results.")
     else:
         print("Query returned no results.")
 
     total_moisture = 0
     count = 0
+    moisture_sensor_name = ""
+
+    # Get name of moisture sensor
+    for device in device_list:
+        if "fridge" not in device["name"].lower():
+            continue
+        for board in device.get("boards", []):
+            for sensor in board.get("sensors", []):
+                if "moisture" in sensor["name"].lower():
+                    moisture_sensor_name = sensor["name"]
+                    break
+            if moisture_sensor_name:
+                break
+        if moisture_sensor_name:
+            break
+
+    print("sensor name = ", moisture_sensor_name)
 
     # Find average moisture reading
     for result in results:
         # Enter sensor name here
-        total_moisture += float(result['payload'].get('Moisture Meter 1', 0))
+        total_moisture += float(result['payload'].get(moisture_sensor_name, 0))
         # testing time format here
         print(result['time'])
         count += 1
@@ -72,31 +93,53 @@ def calculate_average_moisture(collection_virtual, collection_metadata):
         return "No moisture data available for the past 3 hours."
 
     average_moisture = total_moisture / count
-    print(f"Average moisture in the fridge in past 3 hours: {average_moisture}")
+    print(f"Average moisture in the fridge in past 3 hours: {average_moisture: .4f}")
 
-    return(f"Average moisture in the fridge in past 3 hours: {average_moisture: .2f} %")
+    return(f"Average moisture in the fridge in past 3 hours: {average_moisture: .0f} %")
 
 
 # Function to find average water consumption in dishwasher
-def dishwasher_water_consumption(collection_virtual, collection_metadata):
-    # Get dishwasher id
-    query = {"customAttributes.name": {"$regex": "Dishwasher", "$options": "i"}}
-    device_id = collection_metadata.find_one(query)['assetUid']
+def dishwasher_water_consumption(collection):
+    # Get dishwasher
+    device_id = ""
+    for device in device_list:
+        if "dishwasher" in device["name"].lower():
+            device_id = device["assetUid"]
+            break
+    print("device_id = ", device_id)
+
     # Get dishwasher water sensor data
     query = {"payload.parent_asset_uid": device_id}
-    results = collection_virtual.find(query)
+    results = collection.find(query)
 
     # Check if we have any results
-    if collection_virtual.count_documents(query) > 0:
+    if collection.count_documents(query) > 0:
         print("Query returned results.")
     else:
         print("Query returned no results.")
 
     total_water_consumption = 0
     count = 0
+    water_sensor_name = ""
+
+    # Get name of water sensor
+    for device in device_list:
+        if "dishwasher" not in device["name"].lower():
+            continue
+        for board in device.get("boards", []):
+            for sensor in board.get("sensors", []):
+                if "water" in sensor["name"].lower():
+                    water_sensor_name = sensor["name"]
+                    break
+            if water_sensor_name:
+                break
+        if water_sensor_name:
+            break
+
+    print("sensor name = ", water_sensor_name)
 
     for result in results:
-        total_water_consumption += float(result['payload'].get('Water Flow Sensor', 0))
+        total_water_consumption += float(result['payload'].get(water_sensor_name, 0))
         count += 1
     print("count = ", count)
     if count == 0:
@@ -107,10 +150,9 @@ def dishwasher_water_consumption(collection_virtual, collection_metadata):
 
 
 # Function to find device with the highest ammeter reading
-def find_greatest_ammeter_reading(collection_virtual):
+def find_greatest_ammeter_reading(collection):
     # Mapping of board names to their Ammeter fields
     device_info = {}
-    board_name = ""
     for device in device_list:
         for board in device.get("boards", []):
             board_name = board["name"]
@@ -125,7 +167,7 @@ def find_greatest_ammeter_reading(collection_virtual):
 
     for board_name, ammeter_field in device_info.items():
         query = {"payload.board_name": board_name}
-        result = collection_virtual.find_one(query)
+        result = collection.find_one(query)
 
         if result:
             # Ammeter
@@ -144,7 +186,7 @@ def find_greatest_ammeter_reading(collection_virtual):
 
 
 # Function to connect to mongoDB cluster and reply to client
-def mongoConnection(command: str, flg) -> str:
+def mongoConnection(command: str) -> str:
     device_list.clear()
     try:
         link = "mongodb+srv://ces7290:MzZyfX3pqH9h5N2S@cluster0.q42n7.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
@@ -158,13 +200,13 @@ def mongoConnection(command: str, flg) -> str:
         # Extract metadata info for each device, store in dictionary list
         devices = collection_metadata.find()
         for device in devices:
-            extract_metadata_info(device, device_list)
+            extract_metadata_info(device)
 
         # Client message commands
         if command == "1":
-            return calculate_average_moisture(collection_virtual, collection_metadata)
+            return calculate_average_moisture(collection_virtual)
         elif command == "2":
-            return dishwasher_water_consumption(collection_virtual, collection_metadata)
+            return dishwasher_water_consumption(collection_virtual)
         elif command == "3":
             return find_greatest_ammeter_reading(collection_virtual)
         else:
@@ -217,7 +259,7 @@ def start_server():
 
                     #Send it back capitalized
                     #client_socket.send(capitalized_message.encode('utf-8'))
-                    client_socket.send(mongoConnection(message, flag).encode('utf-8'))
+                    client_socket.send(mongoConnection(message).encode('utf-8'))
                 except ConnectionResetError:
                     print("Connection Reset Error")
                     break
@@ -235,4 +277,3 @@ def start_server():
 
 if __name__ == "__main__":
     start_server()
-    #TO DO: Client request and call functions
