@@ -1,8 +1,3 @@
-
-#  Troy Waters, Student ID 029451303.
-#  CECS 327
-
-
 import socket
 
 def start_client():
