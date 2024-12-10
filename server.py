@@ -1,177 +1,184 @@
-import socket
-import threading
-import time
-import contextlib
-import errno
 from pymongo import MongoClient
-from datetime import datetime
-from dataclasses import dataclass
+from datetime import datetime, timedelta
+import socket
+import pytz
 
-exitSignal = 0
-maxPacketSize = 1024
-defaultPort = 4000  # Set this to your preferred port
+def calculate_average_moisture(collection_virtual, collection_metadata):
+    """Calculate average moisture in the kitchen fridge over the past three hours."""
+    # start time = three_hours_ago, end time = datetime.utcnow()
+    three_hours_ago = datetime.utcnow() - timedelta(hours=3)
+    print("current time = ", datetime.utcnow())
+    print("three hours ago = ", three_hours_ago)
+    # Get fridge id
+    query = {"customAttributes.name": {"$regex": "fridge", "$options": "i"}}
+    device_id = collection_metadata.find_one(query)['assetUid']
+    # Get fridge moisture meter data
+    query = {"payload.parent_asset_uid": device_id, 'time': {"$gte": three_hours_ago}}
+    results = collection_virtual.find(query)
 
-# Connect to MongoDB
-def connect_to_db():
-    client = MongoClient("mongodb://localhost:27017/")
-    db = client["iot_data"]
-    return db
-
-db = connect_to_db()
-
-# Binary Tree Implementation for Efficient Data Management
-class Node:
-    def __init__(self, key, data):
-        self.key = key
-        self.data = data
-        self.left = None
-        self.right = None
-
-class BinaryTree:
-    def __init__(self):
-        self.root = None
-
-    def insert(self, key, data):
-        if not self.root:
-            self.root = Node(key, data)
-        else:
-            self._insert(self.root, key, data)
-
-    def _insert(self, current_node, key, data):
-        if key < current_node.key:
-            if current_node.left:
-                self._insert(current_node.left, key, data)
-            else:
-                current_node.left = Node(key, data)
-        elif key > current_node.key:
-            if current_node.right:
-                self._insert(current_node.right, key, data)
-            else:
-                current_node.right = Node(key, data)
-
-    def search(self, key):
-        return self._search(self.root, key)
-
-    def _search(self, current_node, key):
-        if not current_node:
-            return None
-        if key == current_node.key:
-            return current_node.data
-        elif key < current_node.key:
-            return self._search(current_node.left, key)
-        else:
-            return self._search(current_node.right, key)
-
-# Query database for metadata and build binary tree
-def build_metadata_tree():
-    metadata_tree = BinaryTree()
-    devices = db["devices"].find()
-    for device in devices:
-        metadata_tree.insert(device["device_id"], device)
-    return metadata_tree
-
-metadata_tree = build_metadata_tree()
-
-# Helper function for unit conversions
-def convert_to_relative_humidity(moisture_reading):
-    return round((moisture_reading / 100.0) * 100, 2)
-
-def convert_to_gallons(liters):
-    return round(liters * 0.264172, 2)
-
-def convert_to_kwh(joules):
-    return round(joules / 3600000, 2)
-
-# Handle incoming TCP connections
-def listen_on_tcp(connection_socket, socket_address):
-    while True:
-        data = connection_socket.recv(maxPacketSize)
-        if data == b"exit":
-            global exitSignal
-            exitSignal = 1
-            break
-
-        if data:
-            query = data.decode("utf-8")
-            print(f"Received query from {socket_address}: {query}")
-
-            # Process the query
-            response = process_query(query)
-
-            # Send response back to the client
-            connection_socket.sendall(response.encode("utf-8"))
-            print("Response sent back to client.")
-        else:
-            print(f"No data received from client at {socket_address}")
-            break
-
-    print(f"Connection closed to {socket_address}.")
-    connection_socket.close()
-
-# Process incoming queries
-def process_query(query):
-    if query == "What is the average moisture inside my kitchen fridge in the past three hours?":
-        # Query the database for moisture data
-        device_data = metadata_tree.search("fridge")
-        if device_data:
-            avg_moisture = sum(device_data["moisture_readings"]) / len(device_data["moisture_readings"])
-            rh = convert_to_relative_humidity(avg_moisture)
-            return f"The average relative humidity in the fridge over the past three hours is {rh}%."
-        return "Device data not found."
-
-    elif query == "What is the average water consumption per cycle in my smart dishwasher?":
-        # Query the database for water consumption data
-        device_data = metadata_tree.search("dishwasher")
-        if device_data:
-            avg_liters = sum(device_data["water_consumption"]) / len(device_data["water_consumption"])
-            gallons = convert_to_gallons(avg_liters)
-            return f"The average water consumption per cycle in the dishwasher is {gallons} gallons."
-        return "Device data not found."
-
-    elif query == "Which device consumed more electricity among my three IoT devices (two refrigerators and a dishwasher)?":
-        # Compare electricity consumption
-        fridge1 = metadata_tree.search("fridge1")
-        fridge2 = metadata_tree.search("fridge2")
-        dishwasher = metadata_tree.search("dishwasher")
-
-        if fridge1 and fridge2 and dishwasher:
-            fridge1_kwh = convert_to_kwh(fridge1["electricity_usage"])
-            fridge2_kwh = convert_to_kwh(fridge2["electricity_usage"])
-            dishwasher_kwh = convert_to_kwh(dishwasher["electricity_usage"])
-
-            max_usage = max(fridge1_kwh, fridge2_kwh, dishwasher_kwh)
-            if max_usage == fridge1_kwh:
-                return "Fridge 1 consumed the most electricity."
-            elif max_usage == fridge2_kwh:
-                return "Fridge 2 consumed the most electricity."
-            else:
-                return "The dishwasher consumed the most electricity."
-        return "Device data not found."
-
+    # Check if we have any results
+    if collection_virtual.count_documents(query) > 0:
+        print("Query returned results.")
     else:
-        return "Invalid query. Please send a valid query."
+        print("Query returned no results.")
 
-# Create TCP socket
-def create_tcp_socket():
-    tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_socket.bind(('localhost', defaultPort))
-    tcp_socket.listen(5)
-    print(f"Server listening on port {defaultPort}")
-    return tcp_socket
+    total_moisture = 0
+    count = 0
 
-# Launch TCP threads
-def launch_tcp_threads():
-    tcp_socket = create_tcp_socket()
-    while True:
-        connection_socket, connection_address = tcp_socket.accept()
-        threading.Thread(target=listen_on_tcp, args=(connection_socket, connection_address)).start()
+    # Find average moisture reading
+    for result in results:
+        # Enter sensor name here
+        total_moisture += float(result['payload'].get('Moisture Meter 1', 0))
+        # testing time format here
+        print(result['time'])
+        count += 1
+    print("count = ", count)
+    if count == 0:
+        return "No moisture data available for the past 3 hours."
 
-# Main execution
+    average_moisture = total_moisture / count
+    print(f"Average moisture in the fridge in past 3 hours: {average_moisture}")
+
+    return(f"Average moisture in the fridge in past 3 hours: {average_moisture: .2f} %")
+def dishwasher_water_consumption(collection_virtual, collection_metadata):
+    # Get dishwasher id
+    query = {"customAttributes.name": {"$regex": "Dishwasher", "$options": "i"}}
+    device_id = collection_metadata.find_one(query)['assetUid']
+    # Get dishwasher water sensor data
+    query = {"payload.parent_asset_uid": device_id}
+    results = collection_virtual.find(query)
+
+    # Check if we have any results
+    if collection_virtual.count_documents(query) > 0:
+        print("Query returned results.")
+    else:
+        print("Query returned no results.")
+
+    total_water_consumption = 0
+    count = 0
+
+    for result in results:
+        total_water_consumption += float(result['payload'].get('Water Flow Sensor', 0))
+        count += 1
+    print("count = ", count)
+    if count == 0:
+        return "No water consumption data available."
+
+    average_water_consumption = total_water_consumption / count
+    # So we just return a pre-determined variable
+    # "Water consumption of Dishwasher: 10 gallons/cycle"
+    return f"Average water consumption per cycle in dishwasher: {average_water_consumption: .2f} gallons"
+def find_greatest_ammeter_reading(collection):
+    # Mapping of board names to their Ammeter fields
+    device_info = {
+        "arduino uno - board 1": "Ammeter Fridge 1",
+        "board 1 30f4d706-4a8c-419b-969f-9221ba897fd7": "Ammeter Fridge 2",
+        "arduino uno - board 2": "Ammeter Dishwasher"
+    }
+
+    ammeter_readings = {}
+
+
+    for board_name, ammeter_field in device_info.items():
+        query = {"payload.board_name": board_name}
+        result = collection.find_one(query)
+
+        if result:
+            # Ammeter
+            ammeter_reading = float(result['payload'].get(ammeter_field, 0))
+            ammeter_readings[board_name] = ammeter_reading
+
+    max_board = max(ammeter_readings, key=ammeter_readings.get)
+    max_reading = ammeter_readings[max_board]
+
+
+    print("Ammeter measurement:")
+    for board, reading in ammeter_readings.items():
+        print(f"  {board}: {reading} Amps")
+
+    print(f"Highest Ammeter reading: {max_board} ({max_reading} A)")
+    return(f"Highest Ammeter reading: {max_board} ({max_reading} A)")
+
+def mongoConnection(command: str) -> str:
+    try:
+        link = "mongodb+srv://ces7290:MzZyfX3pqH9h5N2S@cluster0.q42n7.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+        client = MongoClient(link)
+
+        # MongoDB
+        data = client['test']
+        collection_virtual = data['iot_data2_virtual']
+        collection_metadata = data['iot_data2_metadata']
+
+        if command == "1":
+            return calculate_average_moisture(collection_virtual, collection_metadata)
+        elif command == "2":
+            return dishwasher_water_consumption(collection_virtual, collection_metadata)
+        elif command == "3":
+            return find_greatest_ammeter_reading(collection_virtual)
+        else:
+            return "Incorrect command. Try again. 1, 2, 3, or 4."
+
+    except Exception as error:
+        print(f"Error connecting to MongoDB: {error}")
+
+
+def start_server():
+    # Input our port and host
+    port = int(input("Enter the port number for server hosting:"))
+    # 0.0.0.0 for Locahost
+    #host = '0.0.0.0'
+    # 10.39.30.228 is wi-fi IPv4
+    #host = '10.39.30.228'
+    host = input("Enter the host IP for server hosting:")
+
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    try:
+        # Bind to the proper port
+        server_socket.bind((host, port))
+
+        # Listening
+        server_socket.listen(5)
+        print(f"Server is now listening on {host}:{port}")
+
+        while True:
+            # Accept the connection from client
+            client_socket, client_address = server_socket.accept()
+            print(f" Client connection : {client_address}")
+
+            while True:
+                try:
+
+                    # Attempt to recieve clients message
+                    message = client_socket.recv(1024).decode('utf-8')
+
+                    if not message:
+                        break
+
+                    print(f"Recieved message from client: {message}")
+
+                    # Convert to uppercase
+                    # capitalized_message = message.upper()
+
+                    #Send it back capitalized
+                    #client_socket.send(capitalized_message.encode('utf-8'))
+                    client_socket.send(mongoConnection(message).encode('utf-8'))
+                except ConnectionResetError:
+                    print("Connection Reset Error")
+                    break
+                except Exception as error:
+                    print(f"Unexpected Error: {error}")
+                    client_socket.send(f"Server error: {error}".encode('utf-8'))
+
+            print(f"Connection closed with {client_address}")
+            client_socket.close()
+
+    except Exception as error:
+        print(f"Error: {error}")
+    finally:
+        server_socket.close()
+
 if __name__ == "__main__":
-    tcp_thread = threading.Thread(target=launch_tcp_threads)
-    tcp_thread.start()
-
-    while not exitSignal:
-        time.sleep(1)
-
-    print("Shutting down the server...")
+    start_server()
+    #TO DO: Client request and call functions

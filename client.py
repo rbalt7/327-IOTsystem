@@ -1,53 +1,42 @@
 import socket
-import ipaddress
-import threading
-import time
-import contextlib
-import errno
 
-maxPacketSize = 1024
-defaultPort = 4000  # Default port
-serverIP = 'localhost'  # Change this to your instance IP
+def start_client():
+    while True:
+        try:
+            # User input ip and port
+            server_port = int(input("Server Port Number:"))
+            server_ip = input("Server IP Address: ")
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-# Define the valid queries
-valid_queries = [
-    "What is the average moisture inside my kitchen fridge in the past three hours?",
-    "What is the average water consumption per cycle in my smart dishwasher?",
-    "Which device consumed more electricity among my three IoT devices (two refrigerators and a dishwasher)?"
-]
+            # Connect to server
+            client_socket.connect((server_ip, server_port))
+            print(f"Connected to the server {server_ip}:{server_port}")
 
-# Initialize TCP socket
-tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-try:
-    tcpPort = int(input("Please enter the TCP port of the host (or press Enter to use the default port): ") or defaultPort)
-except ValueError:
-    tcpPort = defaultPort
+            while True:
+                # User input message
+                #message = input("Enter message for server or 'exit' to exit':")
+                message = input("Enter command:"
+                                "\n1 for Average Moisture"
+                                "\n2 for Dishwasher Water cycle consumption"
+                                "\n3 for Device that consumes the most electricity"
+                                "\n4 to Quit\n")
+                if message.lower() == '4':
+                    print("Closing connection")
+                    break
 
-tcpSocket.connect((serverIP, tcpPort))
+                # Send
+                client_socket.send(message.encode('utf-8'))
 
-print("Connected to the server. Type your queries below (or type 'exit' to quit).")
+                # Receive Response
+                response = client_socket.recv(1024).decode('utf-8')
+                print(f"Server response: {response}")
 
-while True:
-    # Get user input
-    clientMessage = input("> ")
+            client_socket.close()
+            break
+        except (ValueError, socket.error) as error:
+            print(f"Error : {error}")
+            continue
 
-    if clientMessage.lower() == "exit":
-        print("Exiting the client...")
-        break
 
-    # Check if the input is a valid query
-    if clientMessage not in valid_queries:
-        print(f"Sorry, this query cannot be processed. Please try one of the following:\n{', '.join(valid_queries)}")
-        continue
 
-    # Send the valid query to the server
-    tcpSocket.sendall(clientMessage.encode('utf-8'))
-    print(f"Sent to server: {clientMessage}")
-
-    # Receive and print the server's response
-    data = tcpSocket.recv(maxPacketSize)
-    print(f"Received from server: {data.decode('utf-8')}")
-
-# Close the socket
-tcpSocket.close()
-
+start_client()
