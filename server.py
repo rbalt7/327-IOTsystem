@@ -1,14 +1,49 @@
 from pymongo import MongoClient
 from datetime import datetime, timedelta
 import socket
-import pytz
 
+# Saves metadata info for each device
+device_list = []
+
+# Function to extract metadata
+def extract_metadata_info(document, device_list):
+    device = {}
+    sensors = []
+
+    # device info
+    device["assetUid"] = document["assetUid"]
+    device["name"] = document["customAttributes"]["name"]
+    device["boards"] = [] # A list to hold board information
+
+    # Iterate over boards
+    for child1 in document["customAttributes"].get("children", []):
+        board = {
+            "name": child1["customAttributes"]["name"],
+            "sensors": []
+        }
+
+        # Iterate over sensors in the board
+        for child2 in child1["customAttributes"].get("children", []):
+            sensor = {
+                "name": child2["customAttributes"]["name"],
+                "unit": child2["customAttributes"].get("unit", ""),
+                "minValue": child2["customAttributes"].get("minValue", ""),
+                "maxValue": child2["customAttributes"].get("maxValue", ""),
+                "DMinValue": child2["customAttributes"].get("desiredMinValue", ""),
+                "DMaxValue": child2["customAttributes"].get("desiredMaxValue", "")
+            }
+            board["sensors"].append(sensor)
+
+        device["boards"].append(board)
+
+    # Append the complete device info to the list
+    device_list.append(device)
+
+
+# Function to find average humidity in fridge
 def calculate_average_moisture(collection_virtual, collection_metadata):
     """Calculate average moisture in the kitchen fridge over the past three hours."""
-    # start time = three_hours_ago, end time = datetime.utcnow()
     three_hours_ago = datetime.utcnow() - timedelta(hours=3)
-    print("current time = ", datetime.utcnow())
-    print("three hours ago = ", three_hours_ago)
     # Get fridge id
     query = {"customAttributes.name": {"$regex": "fridge", "$options": "i"}}
     device_id = collection_metadata.find_one(query)['assetUid']
@@ -40,6 +75,9 @@ def calculate_average_moisture(collection_virtual, collection_metadata):
     print(f"Average moisture in the fridge in past 3 hours: {average_moisture}")
 
     return(f"Average moisture in the fridge in past 3 hours: {average_moisture: .2f} %")
+
+
+# Function to find average water consumption in dishwasher
 def dishwasher_water_consumption(collection_virtual, collection_metadata):
     # Get dishwasher id
     query = {"customAttributes.name": {"$regex": "Dishwasher", "$options": "i"}}
@@ -65,23 +103,29 @@ def dishwasher_water_consumption(collection_virtual, collection_metadata):
         return "No water consumption data available."
 
     average_water_consumption = total_water_consumption / count
-    # So we just return a pre-determined variable
-    # "Water consumption of Dishwasher: 10 gallons/cycle"
     return f"Average water consumption per cycle in dishwasher: {average_water_consumption: .2f} gallons"
-def find_greatest_ammeter_reading(collection):
+
+
+# Function to find device with the highest ammeter reading
+def find_greatest_ammeter_reading(collection_virtual):
     # Mapping of board names to their Ammeter fields
-    device_info = {
-        "arduino uno - board 1": "Ammeter Fridge 1",
-        "board 1 30f4d706-4a8c-419b-969f-9221ba897fd7": "Ammeter Fridge 2",
-        "arduino uno - board 2": "Ammeter Dishwasher"
-    }
+    device_info = {}
+    board_name = ""
+    for device in device_list:
+        for board in device.get("boards", []):
+            board_name = board["name"]
+            for sensor in board.get("sensors", []):
+                if "Ammeter" in sensor["name"]:
+                    device_info[board_name] = sensor["name"]
+                    break
+            else:
+                continue
 
     ammeter_readings = {}
 
-
     for board_name, ammeter_field in device_info.items():
         query = {"payload.board_name": board_name}
-        result = collection.find_one(query)
+        result = collection_virtual.find_one(query)
 
         if result:
             # Ammeter
@@ -91,7 +135,6 @@ def find_greatest_ammeter_reading(collection):
     max_board = max(ammeter_readings, key=ammeter_readings.get)
     max_reading = ammeter_readings[max_board]
 
-
     print("Ammeter measurement:")
     for board, reading in ammeter_readings.items():
         print(f"  {board}: {reading} Amps")
@@ -99,7 +142,10 @@ def find_greatest_ammeter_reading(collection):
     print(f"Highest Ammeter reading: {max_board} ({max_reading} A)")
     return(f"Highest Ammeter reading: {max_board} ({max_reading} A)")
 
-def mongoConnection(command: str) -> str:
+
+# Function to connect to mongoDB cluster and reply to client
+def mongoConnection(command: str, flg) -> str:
+    device_list.clear()
     try:
         link = "mongodb+srv://ces7290:MzZyfX3pqH9h5N2S@cluster0.q42n7.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
         client = MongoClient(link)
@@ -109,6 +155,12 @@ def mongoConnection(command: str) -> str:
         collection_virtual = data['iot_data2_virtual']
         collection_metadata = data['iot_data2_metadata']
 
+        # Extract metadata info for each device, store in dictionary list
+        devices = collection_metadata.find()
+        for device in devices:
+            extract_metadata_info(device, device_list)
+
+        # Client message commands
         if command == "1":
             return calculate_average_moisture(collection_virtual, collection_metadata)
         elif command == "2":
@@ -122,7 +174,9 @@ def mongoConnection(command: str) -> str:
         print(f"Error connecting to MongoDB: {error}")
 
 
+# Function to start server
 def start_server():
+    flag = False
     # Input our port and host
     port = int(input("Enter the port number for server hosting:"))
     # 0.0.0.0 for Locahost
@@ -163,7 +217,7 @@ def start_server():
 
                     #Send it back capitalized
                     #client_socket.send(capitalized_message.encode('utf-8'))
-                    client_socket.send(mongoConnection(message).encode('utf-8'))
+                    client_socket.send(mongoConnection(message, flag).encode('utf-8'))
                 except ConnectionResetError:
                     print("Connection Reset Error")
                     break
