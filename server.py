@@ -2,11 +2,13 @@ from pymongo import MongoClient
 from datetime import datetime, timedelta
 import socket
 
+
 # Dictionary list that saves metadata info for each device
 device_list = []
 
 # Function to extract metadata
 def extract_metadata_info(document):
+
     device = {}
     sensors = []
 
@@ -167,7 +169,7 @@ def find_greatest_ammeter_reading(collection):
 
     for board_name, ammeter_field in device_info.items():
         query = {"payload.board_name": board_name}
-        result = collection.find_one(query)
+        result = collection_virtual.find_one(query)
 
         if result:
             # Ammeter
